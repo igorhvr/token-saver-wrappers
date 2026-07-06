@@ -7,7 +7,9 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$TESTS_DIR")"
 
-export TOKEN_SAVER_HOME="$(mktemp -d /tmp/token-saver-test.XXXXXX)"
+# Must live under $HOME: podman on macOS only bind-mounts the user's home dir
+# into its VM, so container volume mounts under /tmp (or /var/folders) fail.
+export TOKEN_SAVER_HOME="$(mktemp -d "$HOME/.token-saver-test.XXXXXX")"
 export TOKEN_SAVER_POD_NAME="token-saver-test"
 export TOKEN_SAVER_HEADROOM_PORT=18787
 export TOKEN_SAVER_MITM_PORT=18790
