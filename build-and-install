@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# build-and-install — build the vendored headroom container image and install
+# the pi-token-saver / hermes-token-saver wrappers into ~/.local/bin.
+#
+# Usage: ./build-and-install [--rebuild]
+#   --rebuild  force a rebuild of the headroom image even if it already exists
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+BIN_DIR="${TOKEN_SAVER_BIN_DIR:-$HOME/.local/bin}"
+MITM_IMAGE="${TOKEN_SAVER_MITM_IMAGE:-docker.io/mitmproxy/mitmproxy:12.1.2}"
+REBUILD=0
+[ "${1:-}" = "--rebuild" ] && REBUILD=1
+
+log() { printf '[build-and-install] %s\n' "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+# --- preflight ---------------------------------------------------------------
+command -v podman >/dev/null || die "podman is required"
+command -v python3 >/dev/null || die "python3 is required"
+command -v curl >/dev/null || die "curl is required"
+command -v newuidmap >/dev/null || die \
+    "newuidmap not found (needed for rootless podman). Install it with: sudo apt-get install -y uidmap"
+grep -q "^$(id -un):" /etc/subuid || die \
+    "no /etc/subuid entry for $(id -un). Add one with: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $(id -un)"
+
+# Minimal user-level podman config on machines where podman was never set up.
+mkdir -p "$HOME/.config/containers"
+if [ ! -f "$HOME/.config/containers/policy.json" ] && [ ! -f /etc/containers/policy.json ]; then
+    log "creating ~/.config/containers/policy.json"
+    printf '{\n  "default": [{"type": "insecureAcceptAnything"}]\n}\n' \
+        > "$HOME/.config/containers/policy.json"
+fi
+if [ ! -f "$HOME/.config/containers/registries.conf" ] && [ ! -f /etc/containers/registries.conf ]; then
+    log "creating ~/.config/containers/registries.conf"
+    printf 'unqualified-search-registries = ["docker.io"]\n' \
+        > "$HOME/.config/containers/registries.conf"
+fi
+
+# On filesystems without native-overlay support for rootless containers (e.g.
+# ZFS), podman needs fuse-overlayfs as the overlay mount program.
+STORAGE_FS="$(stat -f -c %T "${XDG_DATA_HOME:-$HOME/.local/share}" 2>/dev/null || echo unknown)"
+if [ "$STORAGE_FS" = "zfs" ] && [ ! -f "$HOME/.config/containers/storage.conf" ]; then
+    command -v fuse-overlayfs >/dev/null || die \
+        "container storage is on ZFS, which needs fuse-overlayfs. Install it with: sudo apt-get install -y fuse-overlayfs"
+    log "creating ~/.config/containers/storage.conf (fuse-overlayfs for ZFS)"
+    printf '[storage]\ndriver = "overlay"\n\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
+        > "$HOME/.config/containers/storage.conf"
+fi
+
+# --- build headroom image from the vendored tarball --------------------------
+HEADROOM_COMMIT="$(cat "$REPO_DIR/vendor/HEADROOM_COMMIT")"
+IMAGE_TAG="localhost/headroom-token-saver:${HEADROOM_COMMIT:0:12}"
+
+if [ "$REBUILD" = 1 ] || ! podman image exists "$IMAGE_TAG"; then
+    BUILD_DIR="$(mktemp -d)"
+    trap 'rm -rf "$BUILD_DIR"' EXIT
+    log "extracting vendored headroom source (commit $HEADROOM_COMMIT)"
+    tar -xzf "$REPO_DIR/vendor/headroom-src.tar.gz" -C "$BUILD_DIR"
+    log "building $IMAGE_TAG — first build compiles Rust and may take 10-30+ minutes"
+    podman build --target runtime-slim-base -t "$IMAGE_TAG" "$BUILD_DIR/headroom"
+else
+    log "headroom image $IMAGE_TAG already built (use --rebuild to force)"
+fi
+podman tag "$IMAGE_TAG" localhost/headroom-token-saver:latest
+
+# --- pull mitmproxy sidecar image ---------------------------------------------
+if ! podman image exists "$MITM_IMAGE"; then
+    log "pulling $MITM_IMAGE"
+    podman pull "$MITM_IMAGE"
+fi
+
+# --- install ------------------------------------------------------------------
+log "installing library files to $TOKEN_SAVER_HOME/lib"
+mkdir -p "$TOKEN_SAVER_HOME/lib" "$BIN_DIR"
+install -m 0644 "$REPO_DIR/lib/common.sh" \
+                "$REPO_DIR/lib/mitm_addon.py" \
+                "$REPO_DIR/lib/gen_intercept_hosts.py" \
+                "$TOKEN_SAVER_HOME/lib/"
+
+log "installing wrappers to $BIN_DIR"
+install -m 0755 "$REPO_DIR/bin/pi-token-saver" \
+                "$REPO_DIR/bin/hermes-token-saver" \
+                "$REPO_DIR/bin/token-saver-ctl" \
+                "$BIN_DIR/"
+
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) log "NOTE: $BIN_DIR is not on your PATH" ;;
+esac
+
+log "done. Commands available: pi-token-saver, hermes-token-saver, token-saver-ctl"
+log "headroom image: $IMAGE_TAG (from vendored commit $HEADROOM_COMMIT)"

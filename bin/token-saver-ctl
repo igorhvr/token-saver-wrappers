@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# token-saver-ctl — manage the token-saver podman pod (headroom + mitm).
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+usage() {
+    cat <<EOF
+Usage: token-saver-ctl <command>
+
+Commands:
+  status     Show pod/container state and headroom readiness
+  start      Start the pod (headroom + mitm)
+  stop       Stop the pod (containers are kept for fast restart)
+  restart    Stop then start
+  destroy    Remove the pod and its containers entirely
+  logs       Tail headroom logs (use 'logs mitm' for the mitm sidecar)
+  stats      Show headroom token-saving stats
+EOF
+    exit 1
+}
+
+case "${1:-}" in
+    status)
+        if ts_pod_exists; then
+            podman pod ps --filter "name=^${TS_POD}\$" --format 'pod: {{.Name}} status: {{.Status}}'
+            podman ps -a --pod --filter "pod=${TS_POD}" --format '  {{.Names}}: {{.Status}}'
+        else
+            echo "pod: $TS_POD (not created)"
+        fi
+        if ts_headroom_ready; then
+            echo "headroom: ready on 127.0.0.1:$TS_HEADROOM_PORT"
+        else
+            echo "headroom: not responding on 127.0.0.1:$TS_HEADROOM_PORT"
+        fi
+        ;;
+    start)
+        ts_ensure_pod with-mitm
+        ts_log "pod $TS_POD is up"
+        ;;
+    stop)
+        ts_pod_exists && ts_podman pod stop -t 5 "$TS_POD" >/dev/null
+        ts_log "pod $TS_POD stopped"
+        ;;
+    restart)
+        ts_pod_exists && ts_podman pod stop -t 5 "$TS_POD" >/dev/null
+        ts_ensure_pod with-mitm
+        ts_log "pod $TS_POD restarted"
+        ;;
+    destroy)
+        ts_pod_exists && ts_podman pod rm -f "$TS_POD" >/dev/null
+        ts_log "pod $TS_POD removed"
+        ;;
+    logs)
+        ts_podman logs -f "${TS_POD}-${2:-headroom}"
+        ;;
+    stats)
+        curl -fsS "http://127.0.0.1:${TS_HEADROOM_PORT}/stats" || ts_die "headroom not reachable"
+        echo
+        ;;
+    *)
+        usage
+        ;;
+esac

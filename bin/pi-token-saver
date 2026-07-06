@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# pi-token-saver — run pi with all openai-completions LLM traffic routed
+# through a local headroom compression proxy (podman pod), without touching
+# pi's configuration.
+#
+# Wiring: pi only honors HTTP(S)_PROXY for endpoint redirection, so an
+# mitmproxy sidecar (with a locally generated CA that pi trusts via
+# NODE_EXTRA_CA_CERTS) intercepts the known LLM API hosts and rewrites
+# /chat/completions calls to headroom, which compresses and forwards to the
+# original upstream. Everything else is tunneled untouched.
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+PI_BIN="${TOKEN_SAVER_PI_BIN:-$(command -v pi || true)}"
+[ -n "$PI_BIN" ] || ts_die "pi not found on PATH. Install pi first."
+
+# --- regenerate the intercept host list from pi's providers + models.json ---
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+mkdir -p "$TS_MITM_DIR"
+NEW_HOSTS="$(python3 "$TS_LIB_DIR/gen_intercept_hosts.py" "$PI_AGENT_DIR/models.json")"
+OLD_HOSTS="$(cat "$TS_HOSTS_FILE" 2>/dev/null || true)"
+if [ "$NEW_HOSTS" != "$OLD_HOSTS" ]; then
+    printf '%s\n' "$NEW_HOSTS" > "$TS_HOSTS_FILE"
+    ts_restart_mitm  # picks up the new list on startup (no-op if not running yet)
+fi
+
+ts_ensure_pod with-mitm
+
+exec env \
+    HTTP_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    HTTPS_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    http_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    https_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    NO_PROXY="localhost,127.0.0.1,::1" \
+    no_proxy="localhost,127.0.0.1,::1" \
+    NODE_EXTRA_CA_CERTS="$TS_CA_CERT" \
+    "$PI_BIN" "$@"

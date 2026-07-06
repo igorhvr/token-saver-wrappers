@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# hermes-token-saver — run hermes with its deepseek LLM traffic routed through
+# a local headroom compression proxy (podman pod), without touching hermes's
+# configuration.
+#
+# Wiring: hermes honors per-provider base-URL env vars, so DEEPSEEK_BASE_URL
+# points the deepseek provider (used directly, as the moa aggregator, and by
+# auxiliary calls) at headroom's OpenAI-dialect endpoint. Headroom forwards
+# compressed requests to its configured OpenAI upstream (api.deepseek.com by
+# default; override with TOKEN_SAVER_OPENAI_UPSTREAM before first pod start).
+# The API key is passed through by headroom, never stored.
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+HERMES_BIN="${TOKEN_SAVER_HERMES_BIN:-$(command -v hermes || true)}"
+[ -n "$HERMES_BIN" ] || ts_die "hermes not found on PATH. Install hermes first."
+
+ts_ensure_pod
+
+exec env \
+    DEEPSEEK_BASE_URL="http://127.0.0.1:${TS_HEADROOM_PORT}/v1" \
+    "$HERMES_BIN" "$@"
