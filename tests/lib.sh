@@ -48,8 +48,7 @@ t_fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 t_install_libs() {
     mkdir -p "$TOKEN_SAVER_HOME/lib"
-    cp "$REPO_DIR/lib/common.sh" "$REPO_DIR/lib/mitm_addon.py" \
-       "$REPO_DIR/lib/gen_intercept_hosts.py" "$TOKEN_SAVER_HOME/lib/"
+    cp "$REPO_DIR"/lib/*.sh "$REPO_DIR"/lib/*.py "$TOKEN_SAVER_HOME/lib/"
 }
 
 t_start_mock() {

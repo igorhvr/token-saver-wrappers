@@ -206,6 +206,7 @@ install -m 0644 "$REPO_DIR/lib/common.sh" \
                 "$REPO_DIR/lib/mitm_addon.py" \
                 "$REPO_DIR/lib/gen_intercept_hosts.py" \
                 "$REPO_DIR/lib/format_stats.py" \
+                "$REPO_DIR/lib/codex_shadow_config.py" \
                 "$TOKEN_SAVER_HOME/lib/"
 
 log "installing wrappers to $BIN_DIR"

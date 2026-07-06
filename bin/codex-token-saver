@@ -40,16 +40,16 @@ if [ -d "$REAL_CODEX_HOME" ]; then
         ln -sfn "$entry" "$SHADOW/$base"
     done
 fi
-# Shadow config.toml = real config with a headroom base-URL override prepended.
-# Strip any existing top-level openai_base_url / model_provider first so the
-# result stays TOML-valid (duplicate top-level keys break codex startup).
-{
-    printf '# token-saver: route Codex through the local headroom proxy.\n'
-    printf 'openai_base_url = "http://127.0.0.1:%s/v1"\n\n' "$TS_HEADROOM_PORT"
-    if [ -f "$REAL_CODEX_HOME/config.toml" ]; then
-        grep -vE '^[[:space:]]*(openai_base_url|model_provider)[[:space:]]*=' \
-            "$REAL_CODEX_HOME/config.toml"
-    fi
-} > "$SHADOW/config.toml"
+# Shadow config.toml = real config transformed so the active provider routes
+# through headroom. Handles both the built-in openai/subscription case
+# (top-level openai_base_url) and a custom provider with its own base_url (an
+# internal GenAI platform) — see lib/codex_shadow_config.py.
+if [ -f "$REAL_CODEX_HOME/config.toml" ]; then
+    python3 "$TS_LIB_DIR/codex_shadow_config.py" "$TS_HEADROOM_PORT" \
+        < "$REAL_CODEX_HOME/config.toml" > "$SHADOW/config.toml"
+else
+    printf '# token-saver: route Codex through the local headroom proxy.\nopenai_base_url = "http://127.0.0.1:%s/v1"\n' \
+        "$TS_HEADROOM_PORT" > "$SHADOW/config.toml"
+fi
 
 exec env CODEX_HOME="$SHADOW" "$CODEX_BIN" "$@"

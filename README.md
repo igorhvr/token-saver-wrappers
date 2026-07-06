@@ -117,15 +117,22 @@ at headroom (which speaks the Anthropic Messages API and forwards to
 
 ### codex-token-saver
 
-Codex on a ChatGPT subscription ignores base-URL env vars and only honors
-`openai_base_url` from `config.toml`. Editing the real `~/.codex` would also
-redirect a plain `codex`, so the wrapper builds a **shadow config dir** (via
-`CODEX_HOME`): every entry of the real dir is symlinked — history, sessions,
-auth, memories, skills are all preserved and written back — and only
-`config.toml` is replaced with a copy that adds the headroom `openai_base_url`.
-Headroom serves the Responses API and the `/backend-api/codex/*` ChatGPT-backend
-routes, so both subscription and API-key auth work. The real `~/.codex` is
-never modified.
+Codex only honors a base-URL override from `config.toml`, not env vars. Editing
+the real `~/.codex` would also redirect a plain `codex`, so the wrapper builds a
+**shadow config dir** (via `CODEX_HOME`): every entry of the real dir is
+symlinked — history, sessions, auth, memories, skills are all preserved and
+written back — and only `config.toml` is replaced with a transformed copy
+(`lib/codex_shadow_config.py`). The real `~/.codex` is never modified. Two
+shapes are handled:
+
+- **Built-in openai / ChatGPT subscription:** set the top-level
+  `openai_base_url` to headroom. Headroom's `/backend-api/codex/*` routes handle
+  the ChatGPT backend.
+- **Custom provider** (`model_provider = "…"` with its own `base_url`, e.g. an
+  internal GenAI platform on the Responses API): point that provider's
+  `base_url` at headroom and inject `x-headroom-base-url` /
+  `x-headroom-original-path` headers so headroom forwards to the real endpoint
+  at the exact path, preserving the provider's auth (`env_key`) and headers.
 
 ## Commands
 
