@@ -20,7 +20,7 @@ die() { log "ERROR: $*"; exit 1; }
 # Prefetch the ONNX Runtime static lib that headroom's Rust deps (fastembed /
 # ort-sys) download from cdn.pyke.io at build time, and patch the extracted
 # Dockerfile to link it via ORT_LIB_LOCATION instead of downloading. Needed
-# behind a TLS-intercepting corporate proxy (e.g. a corporate TLS-inspecting proxy) where ort's
+# behind a TLS-intercepting corporate proxy where ort's
 # rustls-webpki downloader rejects the proxy's CA: the host trusts the proxy CA
 # and can fetch the file, then hands it to the build offline. The vendored
 # tarball is left untouched — only the extracted build copy is patched.
@@ -87,9 +87,9 @@ resolve_corp_ca() {
     fi
     [ "$OS" = "Darwin" ] || return 0
     local out; out="$(mktemp)"
-    { security find-certificate -a -c corp-proxy  -p /Library/Keychains/System.keychain 2>/dev/null
-      security find-certificate -a -c corp-proxy -p /Library/Keychains/System.keychain 2>/dev/null
-    } > "$out"
+    # Admin-installed roots (including a corporate TLS-inspection CA) live in the
+    # System keychain, separate from Apple's built-in roots — export them all.
+    security find-certificate -a -p /Library/Keychains/System.keychain 2>/dev/null > "$out"
     if grep -q "BEGIN CERT" "$out"; then printf '%s\n' "$out"; else rm -f "$out"; fi
 }
 

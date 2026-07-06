@@ -221,9 +221,9 @@ TS_CA_MARKER_END="# <<< token-saver mitm CA (managed) <<<"
 
 # Echo the CA bundle path(s) that hermes pins via $HERMES_HOME/.env
 # (SSL_CERT_FILE / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE) plus a conventional
-# $HERMES_HOME/cacerts.pem. These are corporate bundles (e.g. a corporate TLS-inspecting proxy) whose
-# use hermes forces regardless of our env, so they are both what we must fold
-# into our combined bundle AND where the mitm CA must be injected.
+# $HERMES_HOME/cacerts.pem. These are corporate CA bundles whose use hermes
+# forces regardless of our env, so they are both what we must fold into our
+# combined bundle AND where the mitm CA must be injected.
 ts_hermes_ca_bundles() {
     local home="${HERMES_HOME:-$HOME/.hermes}" envf="${HERMES_HOME:-$HOME/.hermes}/.env" b
     if [ -f "$envf" ]; then

@@ -31,12 +31,12 @@ commands you use (`pi`, `hermes`, `claude`, `codex`).
   uidmap`). On ZFS, also `fuse-overlayfs`. `build-and-install` checks for these.
 - **macOS:** podman via Homebrew. `build-and-install` creates and starts a
   `podman machine` VM automatically if one isn't running. Behind a
-  TLS-intercepting corporate proxy (e.g. a corporate TLS-inspecting proxy), it also prefetches the
-  ONNX Runtime and trusts the corporate CA in the build (see below).
+  TLS-intercepting corporate proxy, it also prefetches the ONNX Runtime and
+  trusts the corporate CA in the build (see below).
 
 ### Corporate TLS-intercepting proxies
 
-Some networks (e.g. a corporate TLS-inspecting proxy) MITM outbound HTTPS. This breaks two
+Some corporate networks MITM outbound HTTPS. This breaks two
 build-time downloads that don't use the system trust store: rustup's installer
 and `ort`'s ONNX Runtime fetch. On macOS `build-and-install` handles both
 automatically — it trusts the corporate CA (from the System keychain) inside
@@ -92,10 +92,10 @@ at a combined bundle = system roots + any corporate bundle + mitm CA, sourced
 from hermes's own `certifi`. This covers the main model client, moa
 members/aggregator, and auxiliary calls in one shot.
 
-Some hermes builds (e.g. the `custom-hermes-fork` fork behind a corporate-proxy-style
-corporate proxy) pin `SSL_CERT_FILE` to their own corporate CA bundle in
-`$HERMES_HOME/.env`, which is loaded *after* our environment and so overrides
-it. When the wrapper detects such a pinned bundle it adds the mitm CA into that
+Some hermes builds behind a corporate proxy pin `SSL_CERT_FILE` to their own
+corporate CA bundle in `$HERMES_HOME/.env`, which is loaded *after* our
+environment and so overrides it. When the wrapper detects such a pinned bundle
+it adds the mitm CA into that
 file inside a clearly-marked, idempotent block — the only way to reach hermes's
 default clients — never removing the user's certs. `token-saver-ctl destroy`
 removes that block again.
