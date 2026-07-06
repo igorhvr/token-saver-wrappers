@@ -17,6 +17,65 @@ REBUILD=0
 log() { printf '[build-and-install] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
+# Prefetch the ONNX Runtime static lib that headroom's Rust deps (fastembed /
+# ort-sys) download from cdn.pyke.io at build time, and patch the extracted
+# Dockerfile to link it via ORT_LIB_LOCATION instead of downloading. Needed
+# behind a TLS-intercepting corporate proxy (e.g. a corporate TLS-inspecting proxy) where ort's
+# rustls-webpki downloader rejects the proxy's CA: the host trusts the proxy CA
+# and can fetch the file, then hands it to the build offline. The vendored
+# tarball is left untouched — only the extracted build copy is patched.
+# $1 = extracted headroom source dir (build context).
+prefetch_ort() {
+    local ctx="$1" triple url pf="$1/.ort-prefetch"
+    case "$(uname -m)" in
+        arm64|aarch64) triple="aarch64-unknown-linux-gnu" ;;
+        x86_64|amd64)  triple="x86_64-unknown-linux-gnu" ;;
+        *) die "unknown arch $(uname -m) for ort prefetch" ;;
+    esac
+    # ort-sys 2.0.0-rc.12 pins ONNX Runtime ms@1.24.2 (from the build's
+    # download URL). Override via TOKEN_SAVER_ORT_URL if the vendored headroom
+    # bumps ort.
+    url="${TOKEN_SAVER_ORT_URL:-https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/${triple}.tar.lzma2}"
+    log "prefetching ONNX Runtime for offline build ($triple)"
+    rm -rf "$pf"; mkdir -p "$pf/lib"
+    curl -fsSL -o "$pf/ort.tar.lzma2" "$url" \
+        || die "failed to download ONNX Runtime from $url"
+    ORT_PF_DIR="$pf" python3 - <<'PY' || die "failed to extract ONNX Runtime"
+import lzma, tarfile, io, os
+pf = os.environ["ORT_PF_DIR"]
+data = open(os.path.join(pf, "ort.tar.lzma2"), "rb").read()
+# pyke ships a raw LZMA2 stream (64 MiB dict), not a standard .xz container.
+dec = lzma.decompress(data, format=lzma.FORMAT_RAW,
+                      filters=[{"id": lzma.FILTER_LZMA2, "dict_size": 1 << 26}])
+tf = tarfile.open(fileobj=io.BytesIO(dec))
+tf.extractall(pf)
+# ort looks for the lib under ORT_LIB_LOCATION and/or its lib/ subdir; put a
+# copy in both so either lookup succeeds.
+import shutil
+lib = os.path.join(pf, "libonnxruntime.a")
+if os.path.isfile(lib):
+    shutil.copy(lib, os.path.join(pf, "lib", "libonnxruntime.a"))
+PY
+    rm -f "$pf/ort.tar.lzma2"
+    [ -f "$pf/libonnxruntime.a" ] || die "ONNX Runtime lib missing after extract"
+    # Insert the COPY + ENV into the builder stage, right before the wheel build.
+    ORT_CTX="$ctx" python3 - <<'PY' || die "failed to patch Dockerfile for ort"
+import os
+df = os.path.join(os.environ["ORT_CTX"], "Dockerfile")
+src = open(df).read()
+anchor = "ARG HEADROOM_EXTRAS=proxy,code\n"
+inject = (anchor
+          + "# token-saver: use prefetched ONNX Runtime (offline; corporate TLS proxy).\n"
+          + "COPY .ort-prefetch /opt/ort\n"
+          + "ENV ORT_LIB_LOCATION=/opt/ort\n")
+if "ORT_LIB_LOCATION=/opt/ort" not in src:
+    if anchor not in src:
+        raise SystemExit("Dockerfile anchor not found")
+    open(df, "w").write(src.replace(anchor, inject, 1))
+PY
+    log "ort prefetch ready; build will link it offline"
+}
+
 # --- preflight ---------------------------------------------------------------
 OS="$(uname -s)"
 command -v podman >/dev/null || die "podman is required"
@@ -76,6 +135,11 @@ if [ "$REBUILD" = 1 ] || ! podman image exists "$IMAGE_TAG"; then
     trap 'rm -rf "$BUILD_DIR"' EXIT
     log "extracting vendored headroom source (commit $HEADROOM_COMMIT)"
     tar -xzf "$REPO_DIR/vendor/headroom-src.tar.gz" -C "$BUILD_DIR"
+    # macOS (or any host behind a TLS-intercepting proxy) can't let the build
+    # container download ONNX Runtime over rustls; prefetch it on the host.
+    if [ "$OS" = "Darwin" ] || [ "${TOKEN_SAVER_ORT_PREFETCH:-0}" = "1" ]; then
+        prefetch_ort "$BUILD_DIR/headroom"
+    fi
     log "building $IMAGE_TAG — first build compiles Rust and may take 10-30+ minutes"
     podman build --target runtime-slim-base -t "$IMAGE_TAG" "$BUILD_DIR/headroom"
 else
