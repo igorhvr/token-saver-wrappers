@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# codex-token-saver — run OpenAI Codex with its LLM traffic routed through a
+# local headroom compression proxy (podman pod), without touching Codex's real
+# configuration.
+#
+# Wiring: Codex on a ChatGPT subscription routes through its built-in "openai"
+# provider regardless of env vars, and only honors a base-URL override from
+# config.toml's top-level `openai_base_url`. To avoid editing the user's real
+# ~/.codex (which would also redirect a plain `codex`), the wrapper builds a
+# SHADOW config dir: every entry of the real dir is symlinked (so history,
+# sessions, auth, memories, skills are all preserved and written back), and
+# only config.toml is replaced with a copy that adds `openai_base_url` pointing
+# at headroom. Headroom speaks the Responses API (and the /backend-api/codex/*
+# ChatGPT-backend routes), compresses, and forwards upstream with the token
+# passed through. Selected via CODEX_HOME.
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+CODEX_BIN="${TOKEN_SAVER_CODEX_BIN:-$(command -v codex || true)}"
+[ -n "$CODEX_BIN" ] || ts_die "codex not found on PATH. Install Codex first."
+
+ts_ensure_pod
+
+REAL_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+SHADOW="$TOKEN_SAVER_HOME/codex-home"
+
+# Rebuild the shadow dir fresh each run: symlink all real state, override only
+# config.toml. Symlinks mean codex reads/writes the real files (history,
+# sessions, sqlite state), so nothing is lost or duplicated.
+rm -rf "$SHADOW"; mkdir -p "$SHADOW"
+if [ -d "$REAL_CODEX_HOME" ]; then
+    for entry in "$REAL_CODEX_HOME"/* "$REAL_CODEX_HOME"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        base="$(basename "$entry")"
+        [ "$base" = "config.toml" ] && continue
+        ln -sfn "$entry" "$SHADOW/$base"
+    done
+fi
+# Shadow config.toml = real config with a headroom base-URL override prepended.
+# Strip any existing top-level openai_base_url / model_provider first so the
+# result stays TOML-valid (duplicate top-level keys break codex startup).
+{
+    printf '# token-saver: route Codex through the local headroom proxy.\n'
+    printf 'openai_base_url = "http://127.0.0.1:%s/v1"\n\n' "$TS_HEADROOM_PORT"
+    if [ -f "$REAL_CODEX_HOME/config.toml" ]; then
+        grep -vE '^[[:space:]]*(openai_base_url|model_provider)[[:space:]]*=' \
+            "$REAL_CODEX_HOME/config.toml"
+    fi
+} > "$SHADOW/config.toml"
+
+exec env CODEX_HOME="$SHADOW" "$CODEX_BIN" "$@"

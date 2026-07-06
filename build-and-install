@@ -211,6 +211,8 @@ install -m 0644 "$REPO_DIR/lib/common.sh" \
 log "installing wrappers to $BIN_DIR"
 install -m 0755 "$REPO_DIR/bin/pi-token-saver" \
                 "$REPO_DIR/bin/hermes-token-saver" \
+                "$REPO_DIR/bin/claude-token-saver" \
+                "$REPO_DIR/bin/codex-token-saver" \
                 "$REPO_DIR/bin/token-saver-ctl" \
                 "$BIN_DIR/"
 

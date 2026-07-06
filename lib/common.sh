@@ -20,6 +20,10 @@ TS_HEADROOM_INTERNAL_PORT=8787
 # x-headroom-base-url header (i.e. hermes traffic). pi traffic always carries
 # the header, so this only affects hermes.
 TS_OPENAI_UPSTREAM="${TOKEN_SAVER_OPENAI_UPSTREAM:-https://api.deepseek.com}"
+# Upstream for Anthropic /v1/messages traffic (claude-token-saver). Claude Code
+# points ANTHROPIC_BASE_URL straight at headroom, so its requests carry no
+# per-host header — headroom forwards them here.
+TS_ANTHROPIC_UPSTREAM="${TOKEN_SAVER_ANTHROPIC_UPSTREAM:-https://api.anthropic.com}"
 
 TS_HEADROOM_IMAGE="${TOKEN_SAVER_HEADROOM_IMAGE:-localhost/headroom-token-saver:latest}"
 TS_MITM_IMAGE="${TOKEN_SAVER_MITM_IMAGE:-docker.io/mitmproxy/mitmproxy:12.1.2}"
@@ -118,6 +122,7 @@ ts_start_headroom() {
         -e "HEADROOM_WORKSPACE_DIR=/headroom-data" \
         -e "HEADROOM_CONFIG_DIR=/headroom-data/config" \
         -e "OPENAI_TARGET_API_URL=$TS_OPENAI_UPSTREAM" \
+        -e "ANTHROPIC_TARGET_API_URL=$TS_ANTHROPIC_UPSTREAM" \
         -e "HEADROOM_UPDATE_CHECK=off" \
         "$TS_HEADROOM_IMAGE" >/dev/null
 }

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# claude-token-saver — run Claude Code with its LLM traffic routed through a
+# local headroom compression proxy (podman pod), without touching Claude's
+# configuration.
+#
+# Wiring: Claude Code natively honors ANTHROPIC_BASE_URL, so the wrapper points
+# it at headroom, which speaks the Anthropic Messages API (/v1/messages),
+# compresses, and forwards to the real upstream (api.anthropic.com by default),
+# passing the API key / OAuth token through untouched. No mitm sidecar or CA
+# trust is needed — this is the same mechanism as `headroom wrap claude`.
+
+set -euo pipefail
+
+TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
+# shellcheck source=../lib/common.sh
+. "$TOKEN_SAVER_HOME/lib/common.sh"
+
+CLAUDE_BIN="${TOKEN_SAVER_CLAUDE_BIN:-$(command -v claude || true)}"
+[ -n "$CLAUDE_BIN" ] || ts_die "claude not found on PATH. Install Claude Code first."
+
+ts_ensure_pod
+
+exec env \
+    ANTHROPIC_BASE_URL="http://127.0.0.1:${TS_HEADROOM_PORT}" \
+    "$CLAUDE_BIN" "$@"

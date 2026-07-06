@@ -1,11 +1,13 @@
 # token-saver-wrappers
 
-Token-saving wrappers for AI coding harnesses. `pi-token-saver` and
-`hermes-token-saver` behave exactly like `pi` and `hermes`, except every LLM
-API request passes through a local [headroom](https://github.com/chopratejas/headroom)
-compression proxy — **without touching either tool's configuration**. Headroom
-compresses tool outputs / context before they reach the provider (and keeps a
-local reversible cache), typically cutting token spend significantly.
+Token-saving wrappers for AI coding harnesses. `pi-token-saver`,
+`hermes-token-saver`, `claude-token-saver`, and `codex-token-saver` behave
+exactly like `pi`, `hermes`, `claude` (Claude Code), and `codex` (OpenAI
+Codex), except every LLM API request passes through a local
+[headroom](https://github.com/chopratejas/headroom) compression proxy —
+**without touching any tool's real configuration**. Headroom compresses tool
+outputs / context before they reach the provider (and keeps a local reversible
+cache), typically cutting token spend significantly.
 
 The exact headroom version used is vendored as a source tarball in
 `vendor/headroom-src.tar.gz` (commit in `vendor/HEADROOM_COMMIT`) and built
@@ -23,8 +25,8 @@ mitmproxy sidecar image, installs runtime libs to `~/.local/share/token-saver/`
 and the commands `pi-token-saver`, `hermes-token-saver`, `token-saver-ctl` to
 `~/.local/bin/`.
 
-Requirements: `podman`, `python3`, `curl`, and the system-installed `pi` /
-`hermes` commands.
+Requirements: `podman`, `python3`, `curl`, and whichever of the wrapped
+commands you use (`pi`, `hermes`, `claude`, `codex`).
 - **Linux:** rootless podman with `uidmap` installed (`sudo apt-get install -y
   uidmap`). On ZFS, also `fuse-overlayfs`. `build-and-install` checks for these.
 - **macOS:** podman via Homebrew. `build-and-install` creates and starts a
@@ -106,16 +108,39 @@ Caveats:
   (excluded from the host list and via `NO_PROXY`); a local model server is
   used directly, uncompressed.
 
+### claude-token-saver
+
+Claude Code natively honors `ANTHROPIC_BASE_URL`, so the wrapper just points it
+at headroom (which speaks the Anthropic Messages API and forwards to
+`api.anthropic.com`). No mitm sidecar or CA trust needed — same mechanism as
+`headroom wrap claude`. The API key / OAuth token is passed through untouched.
+
+### codex-token-saver
+
+Codex on a ChatGPT subscription ignores base-URL env vars and only honors
+`openai_base_url` from `config.toml`. Editing the real `~/.codex` would also
+redirect a plain `codex`, so the wrapper builds a **shadow config dir** (via
+`CODEX_HOME`): every entry of the real dir is symlinked — history, sessions,
+auth, memories, skills are all preserved and written back — and only
+`config.toml` is replaced with a copy that adds the headroom `openai_base_url`.
+Headroom serves the Responses API and the `/backend-api/codex/*` ChatGPT-backend
+routes, so both subscription and API-key auth work. The real `~/.codex` is
+never modified.
+
 ## Commands
 
 ```sh
-pi-token-saver [any pi args...]
+pi-token-saver     [any pi args...]
 hermes-token-saver [any hermes args...]
-token-saver-ctl status|start|stop|restart|destroy|logs [mitm]|stats
+claude-token-saver [any claude args...]
+codex-token-saver  [any codex args...]
+token-saver-ctl    status|start|stop|restart|destroy|logs [mitm]|stats [--full-raw-json]
 ```
 
-`token-saver-ctl stats` shows headroom's token-savings counters. The dashboard
-is at http://127.0.0.1:8787/dashboard while the pod runs.
+`token-saver-ctl stats` prints a readable token-savings summary (add
+`--full-raw-json` for the raw payload). The headroom dashboard is at
+http://127.0.0.1:<port>/dashboard while the pod runs (the port is shown by
+`token-saver-ctl status`).
 
 ## Configuration (env vars)
 
