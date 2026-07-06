@@ -25,6 +25,8 @@ TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
 CLAUDE_BIN="${TOKEN_SAVER_CLAUDE_BIN:-$(command -v claude || true)}"
 [ -n "$CLAUDE_BIN" ] || ts_die "claude not found on PATH. Install Claude Code first."
 
+ts_warn_if_home claude
+
 REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 REAL_SETTINGS="$REAL_CLAUDE_DIR/settings.json"
 

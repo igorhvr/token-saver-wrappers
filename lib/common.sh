@@ -37,6 +37,22 @@ TS_HOSTS_FILE="$TS_MITM_DIR/intercept-hosts.txt"
 ts_log() { printf '[token-saver] %s\n' "$*" >&2; }
 ts_die() { ts_log "ERROR: $*"; exit 1; }
 
+# Warn (on STDERR) when invoked from the user's home directory. Tools that read
+# a per-directory config (claude → ~/.claude, codex → ~/.codex) treat that real
+# config as PROJECT-level config when the cwd is $HOME, which overrides the
+# shadow config the wrapper injects and can send traffic straight to the
+# provider, bypassing headroom. $1 is the tool name for the message.
+ts_warn_if_home() {
+    local tool="${1:-this tool}" cwd home
+    cwd="$(pwd -P 2>/dev/null || pwd)"
+    home="$( (cd "$HOME" 2>/dev/null && pwd -P) || printf '%s' "$HOME")"
+    [ "$cwd" = "$home" ] || return 0
+    ts_log "WARNING: running from your home directory ($home)."
+    ts_log "         ${tool}'s real config there is read as project-level config,"
+    ts_log "         overriding the proxy routing — traffic may BYPASS headroom and"
+    ts_log "         not be compressed. Run from a project directory instead."
+}
+
 # Silence the podman cgroups-v1 deprecation warning without a lingering
 # process-substitution child (which would keep an fd open across our exec).
 export PODMAN_IGNORE_CGROUPSV1_WARNING=1

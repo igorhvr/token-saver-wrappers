@@ -23,6 +23,8 @@ TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
 CODEX_BIN="${TOKEN_SAVER_CODEX_BIN:-$(command -v codex || true)}"
 [ -n "$CODEX_BIN" ] || ts_die "codex not found on PATH. Install Codex first."
 
+ts_warn_if_home codex
+
 ts_ensure_pod
 
 REAL_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
