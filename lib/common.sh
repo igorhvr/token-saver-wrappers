@@ -123,9 +123,21 @@ ts_wait_ca() {
     return 0
 }
 
+# On macOS, podman runs containers in a VM that must be running first.
+ts_ensure_machine() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+    podman machine inspect >/dev/null 2>&1 \
+        || ts_die "no podman machine. Run build-and-install (or: podman machine init)."
+    [ "$(podman machine inspect --format '{{.State}}' 2>/dev/null)" = "running" ] && return 0
+    ts_log "starting podman machine"
+    podman machine start >/dev/null 2>&1 \
+        || ts_die "could not start podman machine (try: podman machine start)"
+}
+
 # Bring up the pod with the requested components. Usage: ts_ensure_pod [with-mitm]
 ts_ensure_pod() {
     local with_mitm="${1:-}"
+    ts_ensure_machine
     ts_pod_exists || ts_create_pod
     ts_start_headroom
     [ "$with_mitm" = "with-mitm" ] && ts_start_mitm

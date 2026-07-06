@@ -36,7 +36,7 @@ cat > "$PI_CODING_AGENT_DIR/models.json" <<EOF
 EOF
 
 t_log "running pi-token-saver -p (brings up pod on first use)"
-OUT="$("$REPO_DIR/bin/pi-token-saver" --provider mockllm --model mock-1 -p "Say hello" 2>&1)" \
+OUT="$(t_timeout 120 "$REPO_DIR/bin/pi-token-saver" --provider mockllm --model mock-1 -p "Say hello" 2>&1)" \
     || t_fail "pi-token-saver exited non-zero: $OUT"
 
 echo "$OUT" | grep -q "$MOCK_MARKER" \

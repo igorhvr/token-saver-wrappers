@@ -35,7 +35,7 @@ EOF
 chmod 600 "$HERMES_HOME/.env"
 
 t_log "running hermes-token-saver -z (brings up pod on first use)"
-OUT="$(timeout 120 "$REPO_DIR/bin/hermes-token-saver" \
+OUT="$(t_timeout 120 "$REPO_DIR/bin/hermes-token-saver" \
         --provider deepseek --model deepseek-chat -z "Say hello" 2>"$TOKEN_SAVER_HOME/hermes.err")" \
     || { t_log "hermes stderr:"; tail -30 "$TOKEN_SAVER_HOME/hermes.err" >&2; \
          t_fail "hermes-token-saver exited non-zero"; }

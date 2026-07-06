@@ -19,6 +19,27 @@ MOCK_PID=""
 MOCK_HOST="host.containers.internal:$MOCK_PORT"
 MOCK_MARKER="TOKEN_SAVER_MOCK_REPLY_7391"
 
+# Portable timeout: GNU `timeout`, Homebrew `gtimeout`, else a shell fallback
+# (macOS ships no `timeout`). Usage: t_timeout SECONDS cmd args...
+t_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    else
+        "$@" &
+        local cmd_pid=$!
+        ( sleep "$secs"; kill -TERM "$cmd_pid" 2>/dev/null ) &
+        local killer=$!
+        local rc=0
+        wait "$cmd_pid" 2>/dev/null || rc=$?
+        kill -TERM "$killer" 2>/dev/null || true
+        wait "$killer" 2>/dev/null || true
+        return "$rc"
+    fi
+}
+
 t_log()  { printf '\033[1;34m[test]\033[0m %s\n' "$*" >&2; }
 t_pass() { printf '\033[1;32m[PASS]\033[0m %s\n' "$*" >&2; }
 t_fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
