@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # claude-token-saver — run Claude Code with its LLM traffic routed through a
-# local headroom compression proxy (podman pod), without touching Claude's
+# local headroom compression proxy (podman pod), without touching Claude's real
 # configuration.
 #
-# Wiring: Claude Code natively honors ANTHROPIC_BASE_URL, so the wrapper points
-# it at headroom, which speaks the Anthropic Messages API (/v1/messages),
-# compresses, and forwards to the real upstream (api.anthropic.com by default),
-# passing the API key / OAuth token through untouched. No mitm sidecar or CA
-# trust is needed — this is the same mechanism as `headroom wrap claude`.
+# Claude Code applies its settings.json `env` block over the process
+# environment, so a plain ANTHROPIC_BASE_URL env var cannot override a
+# settings.json that pins a custom endpoint (e.g. an internal GenAI platform).
+# To avoid editing the real ~/.claude (which would also redirect a plain
+# `claude`), the wrapper builds a SHADOW config dir (via CLAUDE_CONFIG_DIR):
+# every entry of the real dir is symlinked (history, projects, apiKeyHelper,
+# hooks preserved), and only settings.json is replaced with a copy whose
+# env.ANTHROPIC_BASE_URL points at headroom. Headroom speaks the Anthropic
+# Messages API and forwards to the real upstream — either api.anthropic.com or,
+# when the real settings pin a custom base URL, that endpoint (set as the pod's
+# ANTHROPIC_TARGET). The API key / OAuth token / apiKeyHelper output and any
+# custom headers pass through untouched.
 
 set -euo pipefail
 
@@ -18,8 +25,54 @@ TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
 CLAUDE_BIN="${TOKEN_SAVER_CLAUDE_BIN:-$(command -v claude || true)}"
 [ -n "$CLAUDE_BIN" ] || ts_die "claude not found on PATH. Install Claude Code first."
 
+REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+REAL_SETTINGS="$REAL_CLAUDE_DIR/settings.json"
+
+# The real endpoint claude normally talks to — headroom must forward there.
+# Derive it from the real settings' env.ANTHROPIC_BASE_URL (a custom GenAI
+# platform), else fall back to Anthropic. TOKEN_SAVER_ANTHROPIC_UPSTREAM wins.
+DERIVED_UPSTREAM=""
+[ -f "$REAL_SETTINGS" ] && DERIVED_UPSTREAM="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print((d.get("env") or {}).get("ANTHROPIC_BASE_URL", ""))
+except Exception:
+    print("")
+' "$REAL_SETTINGS")"
+TS_ANTHROPIC_UPSTREAM="${TOKEN_SAVER_ANTHROPIC_UPSTREAM:-${DERIVED_UPSTREAM:-https://api.anthropic.com}}"
+
+# Recreate the pod if it targets a different Anthropic upstream, then bring up.
+ts_require_anthropic_target
 ts_ensure_pod
 
-exec env \
-    ANTHROPIC_BASE_URL="http://127.0.0.1:${TS_HEADROOM_PORT}" \
-    "$CLAUDE_BIN" "$@"
+# Shadow config dir: symlink all real state, override only settings.json so
+# claude routes to headroom.
+SHADOW="$TOKEN_SAVER_HOME/claude-home"
+rm -rf "$SHADOW"; mkdir -p "$SHADOW"
+if [ -d "$REAL_CLAUDE_DIR" ]; then
+    for entry in "$REAL_CLAUDE_DIR"/* "$REAL_CLAUDE_DIR"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        base="$(basename "$entry")"
+        [ "$base" = "settings.json" ] && continue
+        ln -sfn "$entry" "$SHADOW/$base"
+    done
+fi
+# Claude keeps its main state file at <dirname config-dir>/.claude.json (i.e.
+# ~/.claude.json for the default ~/.claude); a config dir without it disrupts
+# config loading. Copy it in (not symlink) so claude's in-session rewrites,
+# which bake in config-dir-specific paths, don't corrupt the real state file.
+# It is re-copied each run, so the real state stays current.
+STATE_FILE="$(dirname "$REAL_CLAUDE_DIR")/.claude.json"
+if [ -f "$STATE_FILE" ] && [ ! -e "$SHADOW/.claude.json" ]; then
+    cp "$STATE_FILE" "$SHADOW/.claude.json"
+fi
+HR_URL="http://127.0.0.1:${TS_HEADROOM_PORT}"
+if [ -f "$REAL_SETTINGS" ]; then
+    python3 "$TS_LIB_DIR/claude_shadow_settings.py" "$HR_URL" \
+        < "$REAL_SETTINGS" > "$SHADOW/settings.json"
+else
+    printf '{\n  "env": { "ANTHROPIC_BASE_URL": "%s" }\n}\n' "$HR_URL" > "$SHADOW/settings.json"
+fi
+
+exec env CLAUDE_CONFIG_DIR="$SHADOW" "$CLAUDE_BIN" "$@"

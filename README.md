@@ -110,10 +110,23 @@ Caveats:
 
 ### claude-token-saver
 
-Claude Code natively honors `ANTHROPIC_BASE_URL`, so the wrapper just points it
-at headroom (which speaks the Anthropic Messages API and forwards to
-`api.anthropic.com`). No mitm sidecar or CA trust needed — same mechanism as
-`headroom wrap claude`. The API key / OAuth token is passed through untouched.
+Claude Code applies its `settings.json` `env` block over the process
+environment, so a plain `ANTHROPIC_BASE_URL` env var can't override a
+`settings.json` that pins a custom endpoint. Like codex, the wrapper builds a
+**shadow config dir** (via `CLAUDE_CONFIG_DIR`): it symlinks all real state
+(and copies `.claude.json`), and replaces only `settings.json` with a copy
+whose `env.ANTHROPIC_BASE_URL` points at headroom — preserving custom headers,
+model mappings, `apiKeyHelper`, and hooks. The real `~/.claude` is never
+modified. Headroom forwards `/v1/messages` to the real upstream, which the
+wrapper reads from the real settings (`api.anthropic.com`, or a custom GenAI
+platform) and sets as the pod's Anthropic target — recreating the pod if that
+target changed (the Anthropic dialect has no per-request upstream override).
+The API key / OAuth token / `apiKeyHelper` output passes through untouched.
+
+Caveat (shared with codex): running from your home directory makes Claude read
+the real `~/.claude/settings.json` as *project-level* config, which overrides
+the shadow user settings and bypasses the proxy. Run from a project directory
+(the normal case).
 
 ### codex-token-saver
 

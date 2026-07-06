@@ -73,6 +73,25 @@ ts_pick_free_ports() {
 }
 
 ts_pod_exists()      { podman pod exists "$TS_POD" 2>/dev/null; }
+
+# The Anthropic upstream headroom forwards /v1/messages to is baked into the
+# headroom container at creation (no per-request override exists for the
+# Anthropic dialect). Echo the value the running container was created with.
+ts_running_anthropic_target() {
+    podman inspect "${TS_POD}-headroom" \
+        --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+        | sed -n 's/^ANTHROPIC_TARGET_API_URL=//p' | head -1
+}
+
+# Ensure the pod's headroom container targets $TS_ANTHROPIC_UPSTREAM; if an
+# existing pod was created with a different target, remove it so ts_ensure_pod
+# recreates it correctly (volumes persist, so nothing is lost).
+ts_require_anthropic_target() {
+    ts_pod_exists || return 0
+    [ "$(ts_running_anthropic_target)" = "$TS_ANTHROPIC_UPSTREAM" ] && return 0
+    ts_log "anthropic upstream changed; recreating pod for $TS_ANTHROPIC_UPSTREAM"
+    ts_podman pod rm -f "$TS_POD" >/dev/null 2>&1 || true
+}
 ts_container_runs()  { [ "$(podman inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]; }
 
 ts_headroom_ready() {
