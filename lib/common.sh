@@ -113,6 +113,45 @@ ts_restart_mitm() {
     fi
 }
 
+# Regenerate the intercept-host list (built-in provider hosts + hosts found in
+# the given config files) and restart mitm if it changed so it re-reads the
+# list. Args: config files (pi models.json and/or hermes config.yaml).
+ts_refresh_intercept_hosts() {
+    mkdir -p "$TS_MITM_DIR"
+    local new old
+    new="$(python3 "$TS_LIB_DIR/gen_intercept_hosts.py" "$@")"
+    old="$(cat "$TS_HOSTS_FILE" 2>/dev/null || true)"
+    if [ "$new" != "$old" ]; then
+        printf '%s\n' "$new" > "$TS_HOSTS_FILE"
+        ts_restart_mitm  # no-op if mitm isn't running yet
+    fi
+}
+
+# Build a CA bundle = system/certifi roots + the mitmproxy CA, written to
+# $TS_MITM_DIR/combined-ca.pem. hermes's httpx verify path does
+# ssl.create_default_context(cafile=...), which trusts ONLY the given file, so
+# a bare mitm CA would break TLS for any host mitm tunnels without terminating
+# (real upstream cert). Appending the mitm CA to the full root set keeps both
+# working. $1 is an optional python interpreter to source certifi from.
+ts_build_combined_ca() {
+    local py="${1:-python3}" base="" out="$TS_MITM_DIR/combined-ca.pem" cand
+    for cand in \
+        "$("$py" -c 'import certifi;print(certifi.where())' 2>/dev/null)" \
+        /etc/ssl/cert.pem \
+        /etc/ssl/certs/ca-certificates.crt \
+        /opt/homebrew/etc/openssl@3/cert.pem \
+        /usr/local/etc/openssl@3/cert.pem; do
+        if [ -n "$cand" ] && [ -f "$cand" ]; then base="$cand"; break; fi
+    done
+    if [ -n "$base" ]; then
+        cat "$base" "$TS_CA_CERT" > "$out"
+    else
+        cp "$TS_CA_CERT" "$out"
+        ts_log "WARN: no system CA bundle found; only the mitm CA will be trusted"
+    fi
+    printf '%s\n' "$out"
+}
+
 ts_wait_ca() {
     local timeout="${1:-30}" waited=0
     while [ ! -s "$TS_CA_CERT" ]; do

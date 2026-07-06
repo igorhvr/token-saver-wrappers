@@ -23,8 +23,12 @@ mitmproxy sidecar image, installs runtime libs to `~/.local/share/token-saver/`
 and the commands `pi-token-saver`, `hermes-token-saver`, `token-saver-ctl` to
 `~/.local/bin/`.
 
-Requirements: `podman` (rootless, with `uidmap` installed), `python3`, `curl`,
-and the system-installed `pi` / `hermes` commands.
+Requirements: `podman`, `python3`, `curl`, and the system-installed `pi` /
+`hermes` commands.
+- **Linux:** rootless podman with `uidmap` installed (`sudo apt-get install -y
+  uidmap`). On ZFS, also `fuse-overlayfs`. `build-and-install` checks for these.
+- **macOS:** podman via Homebrew. `build-and-install` creates and starts a
+  `podman machine` VM automatically if one isn't running.
 
 ## How it works
 
@@ -35,36 +39,51 @@ session ends (stop it with `token-saver-ctl stop`).
 ```
 pod "token-saver"
 ├── headroom   127.0.0.1:8787  (built from vendor/headroom-src.tar.gz)
-└── mitm       127.0.0.1:8790  (mitmproxy sidecar, used by pi only)
+└── mitm       127.0.0.1:8790  (mitmproxy sidecar)
 ```
 
-### hermes-token-saver
+Both wrappers use the **same mechanism**: a mitmproxy sidecar intercepts the
+known LLM API hosts and rewrites OpenAI-style `…/chat/completions` requests to
+headroom, which compresses and forwards to the real upstream — preserving your
+API key and any custom auth headers. This is provider-agnostic: it works with
+built-in providers (deepseek, openrouter, …) and with **custom endpoints**
+(e.g. an internal GenAI platform configured via `baseUrl`/`base_url`) alike.
 
-hermes honors per-provider base-URL env vars, so the wrapper simply sets
-`DEEPSEEK_BASE_URL=http://127.0.0.1:8787/v1`. That covers direct deepseek use,
-the `moa` aggregator, and hermes's auxiliary LLM calls. Headroom forwards to
-its configured OpenAI-dialect upstream (`api.deepseek.com` by default) and
-passes your API key through without storing it. Currently only the deepseek
-provider is routed; other providers work normally, just uncompressed.
+1. On each launch the wrapper regenerates an intercept-host list from the
+   built-in openai-completions provider endpoints plus the hosts found in the
+   tool's own config — `~/.pi/agent/models.json` for pi, `~/.hermes/config.yaml`
+   for hermes (loopback hosts excluded).
+2. mitmproxy TLS-intercepts **only** those hosts; every other host is tunneled
+   untouched (no TLS termination). The locally generated mitm CA is trusted per
+   process via env only — nothing is installed system-wide.
+3. The addon rewrites `…/chat/completions` (any base path) to headroom,
+   carrying the real upstream in `x-headroom-base-url` / `x-headroom-original-
+   path` headers, so one headroom instance serves any number of providers.
+   Non-LLM paths on intercepted hosts (e.g. `/models`) pass through unmodified.
 
 ### pi-token-saver
 
-pi has no base-URL overrides, so the wrapper uses pi's `HTTPS_PROXY` support:
+Sets `HTTP(S)_PROXY` to the mitm sidecar and `NODE_EXTRA_CA_CERTS` to the mitm
+CA (Node appends it to the system roots). pi routes all provider SDK traffic
+through the global undici proxy dispatcher, so this covers every
+openai-completions provider and pi's spawned subagents.
 
-1. It regenerates an intercept-host list from pi's built-in
-   openai-completions provider endpoints plus every `baseUrl` in your
-   `~/.pi/agent/models.json` (loopback hosts excluded).
-2. The mitmproxy sidecar TLS-intercepts **only** those hosts (everything else
-   is tunneled untouched, no TLS termination). pi trusts the locally generated
-   CA via `NODE_EXTRA_CA_CERTS` — nothing is installed system-wide.
-3. The addon rewrites `…/chat/completions` requests to headroom, carrying the
-   real upstream in `x-headroom-base-url` / `x-headroom-original-path` headers,
-   so one headroom instance serves any number of providers. Non-LLM paths on
-   intercepted hosts (e.g. `/models`) pass through unmodified.
+### hermes-token-saver
 
-Caveat: `HTTPS_PROXY` is inherited by subprocesses pi spawns (that's what makes
-pi's own subagents work), so a `curl https://api.deepseek.com/...` run inside a
-pi bash tool would also be intercepted and would need `--cacert` to verify.
+Sets `HTTP(S)_PROXY`/`ALL_PROXY` to the mitm sidecar. hermes builds an SSL
+context from `HERMES_CA_BUNDLE`/`SSL_CERT_FILE` that *replaces* the system
+roots, so the wrapper points those (and `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`)
+at a combined bundle = system roots + mitm CA, sourced from hermes's own
+`certifi`. This covers the main model client, moa members/aggregator, and
+auxiliary calls in one shot.
+
+Caveats:
+- `HTTP(S)_PROXY` is inherited by subprocesses the tools spawn (that's what
+  makes their own subagents route correctly), so a `curl https://…` run inside
+  a bash tool is also intercepted and would need `--cacert` to verify.
+- Endpoints on `localhost`/`127.0.0.1` are intentionally **not** intercepted
+  (excluded from the host list and via `NO_PROXY`); a local model server is
+  used directly, uncompressed.
 
 ## Commands
 
@@ -85,7 +104,7 @@ is at http://127.0.0.1:8787/dashboard while the pod runs.
 | `TOKEN_SAVER_POD_NAME` | `token-saver` | podman pod name |
 | `TOKEN_SAVER_HEADROOM_PORT` | `8787` | headroom host port (127.0.0.1) |
 | `TOKEN_SAVER_MITM_PORT` | `8790` | mitm sidecar host port (127.0.0.1) |
-| `TOKEN_SAVER_OPENAI_UPSTREAM` | `https://api.deepseek.com` | default upstream for requests without `x-headroom-base-url` (hermes traffic) |
+| `TOKEN_SAVER_OPENAI_UPSTREAM` | `https://api.deepseek.com` | fallback upstream for OpenAI requests that lack an `x-headroom-base-url` header (normal traffic always carries one) |
 | `TOKEN_SAVER_PI_BIN` / `TOKEN_SAVER_HERMES_BIN` | from `PATH` | real binary to exec |
 
 Port/upstream changes take effect on pod (re)creation: `token-saver-ctl destroy`

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# hermes-token-saver — run hermes with its deepseek LLM traffic routed through
-# a local headroom compression proxy (podman pod), without touching hermes's
+# hermes-token-saver — run hermes with all its LLM API traffic routed through a
+# local headroom compression proxy (podman pod), without touching hermes's
 # configuration.
 #
-# Wiring: hermes honors per-provider base-URL env vars, so DEEPSEEK_BASE_URL
-# points the deepseek provider (used directly, as the moa aggregator, and by
-# auxiliary calls) at headroom's OpenAI-dialect endpoint. Headroom forwards
-# compressed requests to its configured OpenAI upstream (api.deepseek.com by
-# default; override with TOKEN_SAVER_OPENAI_UPSTREAM before first pod start).
-# The API key is passed through by headroom, never stored.
+# Wiring: hermes honors HTTP(S)_PROXY for every httpx client it builds (main
+# model, moa members/aggregator, and auxiliary calls), and trusts a custom CA
+# via HERMES_CA_BUNDLE / SSL_CERT_FILE. So the same mitmproxy sidecar used by
+# pi intercepts the known LLM API hosts (built-in providers + whatever custom
+# base_url is in hermes's config.yaml) and rewrites /chat/completions to
+# headroom, which compresses and forwards to the original upstream, preserving
+# custom auth headers. This is provider-agnostic — it works with the built-in
+# deepseek/openrouter/etc. providers and with custom endpoints alike.
 
 set -euo pipefail
 
@@ -19,8 +21,30 @@ TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
 HERMES_BIN="${TOKEN_SAVER_HERMES_BIN:-$(command -v hermes || true)}"
 [ -n "$HERMES_BIN" ] || ts_die "hermes not found on PATH. Install hermes first."
 
-ts_ensure_pod
+# Regenerate the intercept host list from hermes's config (any base_url) plus
+# the built-in provider hosts.
+HERMES_CONFIG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+ts_refresh_intercept_hosts "$HERMES_CONFIG"
+
+ts_ensure_pod with-mitm
+
+# hermes's TLS verify replaces the system roots with the given CA file, so we
+# hand it a bundle of system roots + the mitm CA. Source certifi from hermes's
+# own interpreter (its shebang) so we always find the bundle hermes trusts.
+HERMES_PY="$(head -1 "$HERMES_BIN" 2>/dev/null | sed 's/^#!//;s/ .*//')"
+[ -x "$HERMES_PY" ] || HERMES_PY=python3
+COMBINED_CA="$(ts_build_combined_ca "$HERMES_PY")"
 
 exec env \
-    DEEPSEEK_BASE_URL="http://127.0.0.1:${TS_HEADROOM_PORT}/v1" \
+    HTTP_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    HTTPS_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    http_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    https_proxy="http://127.0.0.1:${TS_MITM_PORT}" \
+    ALL_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \
+    NO_PROXY="localhost,127.0.0.1,::1" \
+    no_proxy="localhost,127.0.0.1,::1" \
+    HERMES_CA_BUNDLE="$COMBINED_CA" \
+    SSL_CERT_FILE="$COMBINED_CA" \
+    REQUESTS_CA_BUNDLE="$COMBINED_CA" \
+    CURL_CA_BUNDLE="$COMBINED_CA" \
     "$HERMES_BIN" "$@"

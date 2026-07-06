@@ -7,7 +7,8 @@
 # mitmproxy sidecar (with a locally generated CA that pi trusts via
 # NODE_EXTRA_CA_CERTS) intercepts the known LLM API hosts and rewrites
 # /chat/completions calls to headroom, which compresses and forwards to the
-# original upstream. Everything else is tunneled untouched.
+# original upstream (preserving custom auth headers). Everything else is
+# tunneled untouched.
 
 set -euo pipefail
 
@@ -18,15 +19,9 @@ TOKEN_SAVER_HOME="${TOKEN_SAVER_HOME:-$HOME/.local/share/token-saver}"
 PI_BIN="${TOKEN_SAVER_PI_BIN:-$(command -v pi || true)}"
 [ -n "$PI_BIN" ] || ts_die "pi not found on PATH. Install pi first."
 
-# --- regenerate the intercept host list from pi's providers + models.json ---
+# Regenerate the intercept host list from pi's providers + models.json.
 PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-mkdir -p "$TS_MITM_DIR"
-NEW_HOSTS="$(python3 "$TS_LIB_DIR/gen_intercept_hosts.py" "$PI_AGENT_DIR/models.json")"
-OLD_HOSTS="$(cat "$TS_HOSTS_FILE" 2>/dev/null || true)"
-if [ "$NEW_HOSTS" != "$OLD_HOSTS" ]; then
-    printf '%s\n' "$NEW_HOSTS" > "$TS_HOSTS_FILE"
-    ts_restart_mitm  # picks up the new list on startup (no-op if not running yet)
-fi
+ts_refresh_intercept_hosts "$PI_AGENT_DIR/models.json"
 
 ts_ensure_pod with-mitm
 
