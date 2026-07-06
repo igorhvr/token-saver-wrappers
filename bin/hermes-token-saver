@@ -29,11 +29,16 @@ ts_refresh_intercept_hosts "$HERMES_CONFIG"
 ts_ensure_pod with-mitm
 
 # hermes's TLS verify replaces the system roots with the given CA file, so we
-# hand it a bundle of system roots + the mitm CA. Source certifi from hermes's
-# own interpreter (its shebang) so we always find the bundle hermes trusts.
+# hand it a bundle of system roots + any corporate bundle + the mitm CA. Source
+# certifi from hermes's own interpreter (its shebang) so we always find the
+# bundle hermes trusts.
 HERMES_PY="$(head -1 "$HERMES_BIN" 2>/dev/null | sed 's/^#!//;s/ .*//')"
 [ -x "$HERMES_PY" ] || HERMES_PY=python3
 COMBINED_CA="$(ts_build_combined_ca "$HERMES_PY")"
+# Some hermes builds pin SSL_CERT_FILE to a corporate CA bundle via
+# $HERMES_HOME/.env, overriding our env; make sure the mitm CA is in that
+# bundle too so hermes's default httpx clients trust the proxy.
+ts_ensure_hermes_ca_trust
 
 exec env \
     HTTP_PROXY="http://127.0.0.1:${TS_MITM_PORT}" \

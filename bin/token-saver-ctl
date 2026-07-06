@@ -52,6 +52,7 @@ case "${1:-}" in
         ;;
     destroy)
         ts_pod_exists && ts_podman pod rm -f "$TS_POD" >/dev/null
+        rm -f "$TS_PORTS_FILE"
         ts_log "pod $TS_POD removed"
         ;;
     logs)
