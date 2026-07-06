@@ -18,7 +18,7 @@ Commands:
   restart    Stop then start
   destroy    Remove the pod and its containers entirely
   logs       Tail headroom logs (use 'logs mitm' for the mitm sidecar)
-  stats      Show headroom token-saving stats
+  stats      Show a token-savings summary (add --full-raw-json for the raw payload)
 EOF
     exit 1
 }
@@ -60,8 +60,20 @@ case "${1:-}" in
         ts_podman logs -f "${TS_POD}-${2:-headroom}"
         ;;
     stats)
-        curl -fsS "http://127.0.0.1:${TS_HEADROOM_PORT}/stats" || ts_die "headroom not reachable"
-        echo
+        raw="$(curl -fsS "http://127.0.0.1:${TS_HEADROOM_PORT}/stats" 2>/dev/null)" \
+            || ts_die "headroom not reachable on 127.0.0.1:${TS_HEADROOM_PORT} (is the pod running? try: token-saver-ctl start)"
+        if [ "${2:-}" = "--full-raw-json" ]; then
+            printf '%s\n' "$raw"
+        else
+            # Include lifetime totals from /stats-history when available.
+            hist="$(mktemp)"
+            if curl -fsS "http://127.0.0.1:${TS_HEADROOM_PORT}/stats-history" -o "$hist" 2>/dev/null; then
+                printf '%s' "$raw" | python3 "$TS_LIB_DIR/format_stats.py" "$hist"
+            else
+                printf '%s' "$raw" | python3 "$TS_LIB_DIR/format_stats.py"
+            fi
+            rm -f "$hist"
+        fi
         ;;
     *)
         usage
