@@ -76,6 +76,47 @@ PY
     log "ort prefetch ready; build will link it offline"
 }
 
+# Resolve a PEM of corporate MITM-proxy CA certificate(s) to trust inside the
+# build container, or empty if none. On macOS the certs are auto-extracted
+# from the System keychain (corporate roots that a managed device
+# already trusts); override or supply on Linux via TOKEN_SAVER_CORP_CA=<path>.
+resolve_corp_ca() {
+    if [ -n "${TOKEN_SAVER_CORP_CA:-}" ]; then
+        [ -f "$TOKEN_SAVER_CORP_CA" ] || die "TOKEN_SAVER_CORP_CA not found: $TOKEN_SAVER_CORP_CA"
+        printf '%s\n' "$TOKEN_SAVER_CORP_CA"; return 0
+    fi
+    [ "$OS" = "Darwin" ] || return 0
+    local out; out="$(mktemp)"
+    { security find-certificate -a -c corp-proxy  -p /Library/Keychains/System.keychain 2>/dev/null
+      security find-certificate -a -c corp-proxy -p /Library/Keychains/System.keychain 2>/dev/null
+    } > "$out"
+    if grep -q "BEGIN CERT" "$out"; then printf '%s\n' "$out"; else rm -f "$out"; fi
+}
+
+# Patch the extracted Dockerfile to install a corporate CA in the builder stage
+# so curl/rustup/cargo trust the MITM proxy (ort still needs prefetch since its
+# rustls-webpki downloader ignores the system trust store).
+# $1 = build context dir, $2 = path to CA PEM.
+inject_corp_ca() {
+    local ctx="$1" ca="$2"
+    cp "$ca" "$ctx/.corp-ca.crt"
+    CA_CTX="$ctx" python3 - <<'PY' || die "failed to patch Dockerfile for corporate CA"
+import os
+df = os.path.join(os.environ["CA_CTX"], "Dockerfile")
+src = open(df).read()
+anchor = "RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs"
+inject = ("# token-saver: trust corporate MITM-proxy CA for build downloads.\n"
+          "COPY .corp-ca.crt /usr/local/share/ca-certificates/corp-mitm.crt\n"
+          "RUN update-ca-certificates\n"
+          "ENV CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt\n")
+if "corp-mitm.crt" not in src:
+    if anchor not in src:
+        raise SystemExit("Dockerfile rustup anchor not found")
+    open(df, "w").write(src.replace(anchor, inject + anchor, 1))
+PY
+    log "corporate CA will be trusted inside the build container"
+}
+
 # --- preflight ---------------------------------------------------------------
 OS="$(uname -s)"
 command -v podman >/dev/null || die "podman is required"
@@ -135,8 +176,13 @@ if [ "$REBUILD" = 1 ] || ! podman image exists "$IMAGE_TAG"; then
     trap 'rm -rf "$BUILD_DIR"' EXIT
     log "extracting vendored headroom source (commit $HEADROOM_COMMIT)"
     tar -xzf "$REPO_DIR/vendor/headroom-src.tar.gz" -C "$BUILD_DIR"
-    # macOS (or any host behind a TLS-intercepting proxy) can't let the build
-    # container download ONNX Runtime over rustls; prefetch it on the host.
+    # Behind a TLS-intercepting corporate proxy (auto-detected on macOS via the
+    # keychain, or forced with TOKEN_SAVER_CORP_CA), trust the proxy CA inside
+    # the builder so curl/rustup/cargo downloads work.
+    CORP_CA="$(resolve_corp_ca || true)"
+    [ -n "$CORP_CA" ] && inject_corp_ca "$BUILD_DIR/headroom" "$CORP_CA"
+    # macOS (or any host behind such a proxy) also can't let the build container
+    # download ONNX Runtime over rustls (webpki-only); prefetch it on the host.
     if [ "$OS" = "Darwin" ] || [ "${TOKEN_SAVER_ORT_PREFETCH:-0}" = "1" ]; then
         prefetch_ort "$BUILD_DIR/headroom"
     fi
