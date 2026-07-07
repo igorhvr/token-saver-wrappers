@@ -52,8 +52,10 @@ def main() -> None:
     comp = s.get("compression", {}) or {}
     unc = s.get("uncompressed_requests", {}) or {}
     cost = s.get("cost", {}) or {}
+    per_model = cost.get("per_model", {}) or {}
 
     reqs = int(_num(s.get("api_requests")))
+    has_per_model = bool(per_model)
     model = s.get("primary_model") or "—"
     if str(model).lower() == "unknown":
         model = "—"
@@ -69,7 +71,8 @@ def main() -> None:
 
     print()
     print("  Token-saver — headroom savings")
-    print(f"  Model:    {model}")
+    if not has_per_model:
+        print(f"  Model:    {model}")
     breakdown = []
     if compressed:
         breakdown.append(f"{compressed} compressed")
@@ -106,6 +109,24 @@ def main() -> None:
             pass
 
     print(_table(rows))
+
+    # Per-model breakdown from cost.per_model, sorted by request count descending.
+    if has_per_model:
+        print()
+        print("  Per-model:")
+        for mname in sorted(per_model, key=lambda k: _num(per_model[k].get("requests", 0) if isinstance(per_model[k], dict) else 0), reverse=True):
+            m = per_model[mname] if isinstance(per_model[mname], dict) else {}
+            m_reqs = _num(m.get("requests"))
+            m_sent = _num(m.get("tokens_sent"))
+            m_saved = _num(m.get("tokens_saved"))
+            m_red = _num(m.get("reduction_pct"))
+            m_rows = [
+                (str(mname), f"{_fmt_int(m_reqs)} requests"),
+                ("", f"{_fmt_int(m_sent)} input tokens"),
+                ("", f"{_fmt_int(m_saved)} tokens saved ({m_red:.1f}%)"),
+            ]
+            print(_table(m_rows))
+
     print()
 
     # One-line interpretation so the number means something.
